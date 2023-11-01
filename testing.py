@@ -1,10 +1,11 @@
 import numpy as np
 import scipy
 import math
+import matplotlib.pyplot as plt
 
 class BernoulliDiffusion:
 
-    def __init__(self, theta=0.6, cost=-0.01, state_range=50):
+    def __init__(self, theta=0.55, cost=-0.0025, state_range=50):
         
         if cost >= 0:
             raise Exception("You really want cost to be strictly negative.")
@@ -36,32 +37,29 @@ class BernoulliDiffusion:
     def state_index(self, x):
         return x - min(self.states)
         
-    def state_action_values(self, x):
+    def state_continue_value(self, x):
         ph1 = self.prob_h1(x)
         prob_up = ph1 * self.theta + (1-ph1) * (1-self.theta)
+        state_up = min(max(self.states), x + 1)
+        state_down = max(min(self.states), x - 1)
 
-        if x == max(self.states):
-            value_continue = self.cost
-            + prob_up * self.state_value_current(x)
-            + (1 - prob_up) * self.state_value_current(x - 1)
-        elif x == min(self.states):
-            value_continue = self.cost
-            + prob_up * self.state_value_current(x + 1)
-            + (1 - prob_up) * self.state_value_current(x)
-        else:
-            value_continue = self.cost
-            + prob_up * self.state_value_current(x + 1)
-            + (1 - prob_up) * self.state_value_current(x - 1)
+        value_continue = self.cost + \
+            prob_up * self.state_value_current(state_up) + \
+            (1 - prob_up) * self.state_value_current(state_down)
 
-        return max(ph1, 1 - ph1), value_continue
+        return value_continue
+    
+    def state_terminate_value(self, x):
+        return max(self.value_choose_h1(x), self.value_choose_h0(x))
     
     def state_value_new(self, x):
-        terminate_value, sample_value = self.state_action_values(x)
-        return max(terminate_value, sample_value)
+        return max(self.state_continue_value(x), self.state_terminate_value(x))
     
     def in_sample_region(self, x):
-        terminate_value, sample_value = self.state_action_values(x)
-        return sample_value >= terminate_value
+        return self.state_continue_value(x) >= self.state_terminate_value(x)
+    
+    def get_sample_region(self):
+        return np.fromiter((self.in_sample_region(x) for x in self.states), bool)
     
     def state_value_update(self, x):
         xind = self.state_index(x)
@@ -86,3 +84,11 @@ class BernoulliDiffusion:
             change = self.update_sweep()
             print(change)
 
+    def view_solution(self):
+        z = np.ma.masked_array(self.v, mask=self.get_sample_region())
+        x = np.arange(min(self.states)-.5,max(self.states)+1)
+        fig, ax = plt.subplots()
+        ax.pcolormesh(x, [-.5,.5], z.reshape((1,len(x)-1)))
+        ax.set_aspect(1)
+        ax.set_yticks([])
+        return fig, ax
