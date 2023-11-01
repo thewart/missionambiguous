@@ -3,7 +3,6 @@ from math import log, exp
 import matplotlib.pyplot as plt
 from numba.types import float64, boolean, int64, UniTuple
 from numba.experimental import jitclass
-from numba import njit, prange
 from random import random
 
 spec = [('theta', UniTuple(float64,2)),
@@ -156,30 +155,18 @@ class Bernoulli2Diffusion:
                 correct = chose_h1 == ground_truth[0] # we assume the true task is task 0
 
         return steps, correct
+    
+    def performance(self, ground_truth=(True, True), niter=int(1e4)):
+        rt = 0.
+        acc = 0.
 
-@njit(parallel=True)
-def performance_parallel(diffobj, ground_truth=(True, True), niter=int(1e4)):
-    rt = 0.
-    acc = 0.
-    sim = diffobj.simulate_agent
+        for i in range(niter):
+            rti, acci = self.simulate_agent(ground_truth)
+            rt += rti
+            acc += acci
+            
+        return rt/niter, acc/niter
 
-    for i in prange(niter):
-        rti, acci = sim(ground_truth)
-        rt += rti
-        acc += acci
-    return rt/niter, acc/niter
-
-@njit
-def performance(diffobj, ground_truth=(True, True), niter=int(1e4)):
-    rt = 0.
-    acc = 0.
-    sim = diffobj.simulate_agent
-
-    for i in range(niter):
-        rti, acci = sim(ground_truth)
-        rt += rti
-        acc += acci
-    return rt/niter, acc/niter
 
 def view_solution(diffobj):
     z = np.ma.masked_array(diffobj.v, mask=diffobj.get_sample_region())
