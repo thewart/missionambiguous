@@ -30,6 +30,8 @@ class Bernoulli2Diffusion:
             x = self.state_of_index(index)
             self.v[index] = self.state_terminate_value(x)
 
+        self.optimize_value()
+
     @staticmethod
     def prob_h(log_odds, x):
         return 1.0 / (1 + exp(-x * log_odds))
@@ -164,7 +166,7 @@ class Bernoulli2Diffusion:
             rti, acci = self.simulate_agent(ground_truth)
             rt += rti
             acc += acci
-            
+
         return rt/niter, acc/niter
 
 
@@ -177,7 +179,7 @@ def view_solution(diffobj):
     return fig, ax
 
 def incongruency_effect(diffobj, niter=int(1e4)):
-    rt_con, acc_con = diffobj.estimate_performance((True, True), niter)
-    rt_inc, acc_inc = diffobj.estimate_performance((True, False), niter)
-    
-    return rt_inc / rt_con, acc_inc / acc_con
+    rt_con, acc_con = diffobj.performance((True, True), niter)
+    rt_inc, acc_inc = diffobj.performance((True, False), niter)
+     
+    return rt_con, rt_inc, acc_con, acc_inc
