@@ -115,7 +115,7 @@ class Bernoulli2Diffusion:
         while change > tol and iter < maxiter:
             change = self.update_sweep()
             iter = iter + 1
-            print(change)
+            # print('Change of ' + str(change) + ' after ' + str(iter) + ' iterations \r')
         print('Value iteration converged after ' + str(iter) + ' iterations.')
         
     # book-keeping
@@ -168,12 +168,12 @@ class Bernoulli2Diffusion:
 
         return steps, correct
     
-    def performance(self, h1_status=(True, True), t1_status=True, niter=int(1e4)):
+    def performance(self, h1_status=(True, True), t1_status=True, x0=(0,0), z0=0, niter=int(1e4)):
         rt = 0.
         acc = 0.
 
         for i in range(niter):
-            rti, acci = self.simulate_agent(h1_status, t1_status)
+            rti, acci = self.simulate_agent(h1_status, t1_status, x0, z0, niter)
             rt += rti
             acc += acci
 
