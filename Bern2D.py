@@ -1,32 +1,34 @@
 import numpy as np
 from math import log, exp
 import matplotlib.pyplot as plt
-from numba.types import float64, boolean, int64, UniTuple
+from numba.types import float64, boolean, int32, UniTuple, Set, unicode_type
 from numba.experimental import jitclass
 from random import random
 
 spec = [('sigma', UniTuple(float64,2)),
             ('theta', float64),
             ('cost', float64),
-            ('state_range', int64),
+            ('state_range', int32),
             ('log_odds', UniTuple(float64,2)),
             ('task_odds', float64),
+            ('sample_actions', UniTuple(Set(unicode_type), 3)),
             ('v', float64[:,:,:])]
 
 @jitclass(spec)
 class Bernoulli2Diffusion:
 
-    def __init__(self, sigma=(0.55, 0.55), theta=0.6, cost=-0.001, state_range=50):
+    def __init__(self, sigma=(0.55, 0.55), theta=0.6, cost=-0.001, sample_actions=({'x0'}, {'x1'}, {'z'}), state_range=50):
 
         if cost >= 0:
             raise Exception("You really want cost to be strictly negative.")
 
-        self.sigma, self.cost, self.theta, self.state_range = sigma, cost, theta, state_range
+        self.sigma, self.cost, self.theta, self.sample_actions, self.state_range = sigma, cost, theta, self.sample_actions, state_range
         self.log_odds = (log(sigma[0]) - log(1-sigma[0]),
                          log(sigma[1]) - log(1-sigma[1]))
         self.task_odds = log(theta) - log(1-theta)
         state_len = self.state_range*2 + 1
         self.v = np.empty((state_len, state_len, state_len)) # (x0, x1, z)
+
 
         for ind in np.ndindex(self.v.shape):
             x0, x1, z = self.state_of_index(ind)
@@ -65,11 +67,27 @@ class Bernoulli2Diffusion:
         return (1-pt1, pt1)
 
     # state-action value computation and manipulation        
-    def state_continue_value(self, x, z):
+    def state_sample_value(self, x, z, sample_action):
+
+        if 'x0' in sample_action:
+            x0_iter = zip(self.next_states(x[0]), self.next_x_prob(x, 0))
+        else:
+            x0_iter = zip((x[0],), (1.,))
+
+        if 'x1' in sample_action:
+            x1_iter = zip(self.next_states(x[1]), self.next_x_prob(x, 1))
+        else:
+            x1_iter = zip((x[1],), (1.,))
+        
+        if 'z' in sample_action:
+            z_iter = zip(self.next_states(z), self.next_z_prob(z))
+        else:
+            z_iter = zip((z,), (1.,))
+
         value_continue = self.cost
-        for x0_next, p0 in zip(self.next_states(x[0]), self.next_x_prob(x, 0)):
-            for x1_next, p1 in zip(self.next_states(x[1]), self.next_x_prob(x, 1)):
-                for z_next, pz in zip(self.next_states(z), self.next_z_prob(z)):
+        for x0_next, p0 in x0_iter:
+            for x1_next, p1 in x1_iter:
+                for z_next, pz in z_iter:
                     value_continue += p0 * p1 * pz * self.state_current_value((x0_next, x1_next), z_next)
         
         return value_continue
@@ -86,11 +104,16 @@ class Bernoulli2Diffusion:
         return self.v[ind]
     
     def state_value_new(self, x, z):
-        return max(self.state_continue_value(x, z), 
+        return max(self.state_sample_value(x, z), 
                    self.state_terminate_value_h0(x, z),
                    self.state_terminate_value_h1(x, z))
+    
+    def state_sample_value_max(self, x, z):
+        vstar = -1.
+        for i, a in enumerate(self.sample_actions):
+            
 
-    def state_value_update(self, x, z):
+    def state_(self, x, z):
         ind = self.index_of_state(x, z)
         new_value = self.state_value_new(x, z)
         value_diff = new_value - self.v[ind]
@@ -132,7 +155,7 @@ class Bernoulli2Diffusion:
         return (ind[0] - self.state_range, ind[1] - self.state_range, ind[2] - self.state_range)
 
     def in_sample_region(self, x, z):
-        cv = self.state_continue_value(x, z)
+        cv = self.state_sample_value(x, z)
         return  cv > self.state_terminate_value_h1(x, z) and cv > self.state_terminate_value_h0(x, z)
     
     def get_sample_region(self):
