@@ -5,8 +5,8 @@ from numba.types import float64, boolean, int64, UniTuple
 from numba.experimental import jitclass
 from random import random
 
-spec = [('theta', UniTuple(float64,2)),
-            ('ptask', float64),
+spec = [('sigma', UniTuple(float64,2)),
+            ('theta', float64),
             ('cost', float64),
             ('state_range', int64),
             ('log_odds', UniTuple(float64,2)),
@@ -15,14 +15,14 @@ spec = [('theta', UniTuple(float64,2)),
 @jitclass(spec)
 class Bernoulli2Diffusion:
 
-    def __init__(self, theta=(0.55, 0.55), ptask=0.6, cost=-0.0025, state_range=50):
+    def __init__(self, sigma=(0.6, 0.6), theta=0.6, cost=-0.0025, state_range=50):
 
         if cost >= 0:
             raise Exception("You really want cost to be strictly negative.")
 
-        self.theta, self.cost, self.ptask, self.state_range = theta, cost, ptask, state_range
-        self.log_odds = (log(theta[0]) - log(1-theta[0]),
-                         log(theta[1]) - log(1-theta[1]))
+        self.sigma, self.cost, self.theta, self.state_range = sigma, cost, theta, state_range
+        self.log_odds = (log(sigma[0]) - log(1-sigma[0]),
+                         log(sigma[1]) - log(1-sigma[1]))
         state_len = self.state_range*2 + 1
         self.v = np.empty((state_len, state_len))
 
@@ -46,8 +46,8 @@ class Bernoulli2Diffusion:
         ph1 = (self.prob_h1(x, 0),
                self.prob_h1(x, 1))
 
-        prob_up = (ph1[0] * self.theta[0] + (1-ph1[0]) * (1-self.theta[0]),
-                   ph1[1] * self.theta[1] + (1-ph1[1]) * (1-self.theta[1]))
+        prob_up = (ph1[0] * self.sigma[0] + (1-ph1[0]) * (1-self.sigma[0]),
+                   ph1[1] * self.sigma[1] + (1-ph1[1]) * (1-self.sigma[1]))
         
         state_up = (self.which_state_up(x[0]), self.which_state_up(x[1]))
         state_down = (self.which_state_down(x[0]), self.which_state_down(x[1]))
@@ -67,7 +67,7 @@ class Bernoulli2Diffusion:
         return max(-self.state_range, x - 1)
     
     def value_choose_h1(self, x):
-        return self.ptask * self.prob_h1(x, 0) + (1-self.ptask) * self.prob_h1(x, 1)
+        return self.theta * self.prob_h1(x, 0) + (1-self.theta) * self.prob_h1(x, 1)
 
     def value_choose_h0(self, x):
         return 1 - self.value_choose_h1(x)
@@ -137,8 +137,8 @@ class Bernoulli2Diffusion:
         return y
     
     def simulate_agent(self, ground_truth=(True, True), x0=(0,0), step_limit=1e4):
-        prob_up = (self.theta[0] if ground_truth[0] else 1.0 - self.theta[0], \
-                   self.theta[1] if ground_truth[1] else 1.0 - self.theta[1])
+        prob_up = (self.sigma[0] if ground_truth[0] else 1.0 - self.sigma[0], \
+                   self.sigma[1] if ground_truth[1] else 1.0 - self.sigma[1])
         steps = 0
         x = x0
         in_sample_region = True
