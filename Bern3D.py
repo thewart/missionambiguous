@@ -2,6 +2,7 @@ import numpy as np
 from numpy import inf
 from math import log, exp
 import matplotlib.pyplot as plt
+from numba import prange, njit
 from numba.types import float64, boolean, int32, UniTuple, ListType, unicode_type
 from numba.experimental import jitclass
 from numba.typed import List
@@ -11,23 +12,34 @@ spec = [('sigma', UniTuple(float64,2)),
             ('theta', float64),
             ('cost', float64),
             ('state_range', int32),
-            ('log_odds', UniTuple(float64,2)),
-            ('task_odds', float64),
-            ('sample_actions', UniTuple(ListType(unicode_type), 3)),
+            ('x_log_odds', UniTuple(float64,2)),
+            ('z_log_odds', float64),
+            ('cue_log_odds', float64),
+            ('pvalid', float64),
+            ('task_prior', float64),
+            ('sample_actions', UniTuple(ListType(unicode_type), 1)), # must be manually changed for different number of actions :(
             ('v', float64[:,:,:])]
 
 @jitclass(spec)
-class Bernoulli2Diffusion:
+class Bernoulli3Diffusion:
+    def __init__(self, sigma=(0.6, 0.6), theta=0.6, pvalid=1.0, task_prior=0.5, cost=-0.001, sample_actions=(List(['x0']), List(['x1']), List(['z'])), state_range=50):
 
-    def __init__(self, sigma=(0.6, 0.6), theta=0.6, cost=-0.001, sample_actions=(List(['x0']), List(['x1']), List(['z'])), state_range=50):
 
         if cost >= 0:
             raise Exception("You really want cost to be strictly negative.")
 
-        self.sigma, self.cost, self.theta, self.sample_actions, self.state_range = sigma, cost, theta, sample_actions, state_range
-        self.log_odds = (log(sigma[0]) - log(1-sigma[0]),
-                         log(sigma[1]) - log(1-sigma[1]))
-        self.task_odds = log(theta) - log(1-theta)
+        self.sigma, self.theta, self.pvalid, self.task_prior = sigma, theta, pvalid, task_prior
+        self.cost, self.sample_actions, self.state_range = cost, sample_actions, state_range
+
+        # log lik ratio that evidence x is conistent with stimulus for stim dims 0 and 1
+        self.x_log_odds = (log(sigma[0]) - log(1-sigma[0]), log(sigma[1]) - log(1-sigma[1]))      
+
+        # log lik ratio that evidence z is consistent with the cue
+        self.z_log_odds = log(theta) - log(1-theta) 
+
+        #prior log odds that task cue indicates task 1, given prior over tasks
+        self.cue_log_odds = log(pvalid*task_prior + (1-pvalid)*(1-task_prior)) - log((1-pvalid)*task_prior + pvalid*(1-task_prior))
+
         state_len = self.state_range*2 + 1
         self.v = np.empty((state_len, state_len, state_len)) # (x0, x1, z)
 
@@ -35,24 +47,24 @@ class Bernoulli2Diffusion:
             x, z = self.state_of_index(ind)
             self.v[ind] = max(self.state_terminate_value_h0(x, z), self.state_terminate_value_h1(x, z))
 
-        self.optimize_value()
+        # optimize_value(self)
 
     # core computations 
     @staticmethod
-    def __prob_h(log_odds, x):
-        return 1.0 / (1 + exp(-x * log_odds))
+    def __prob_h(log_odds, x, offset=0.0):
+        return 1.0 / (1.0 + exp(-(x*log_odds + offset)))
     
     def prob_h1(self, x, task=0):
-        return self.__prob_h(self.log_odds[task], x[task])
+        return self.__prob_h(self.x_log_odds[task], x[task])
     
     def prob_h0(self, x, task=0):
-        return self.__prob_h(self.log_odds[task], -x[task])
+        return self.__prob_h(self.x_log_odds[task], -x[task])
     
-    def prob_t1(self, z):
-        return self.__prob_h(self.task_odds, z)
+    def prob_c1(self, z):
+        return self.__prob_h(self.z_log_odds, z, self.cue_log_odds)
     
-    def prob_t0(self, z):
-        return self.__prob_h(self.task_odds, -z)
+    def prob_c0(self, z):
+        return self.__prob_h(self.z_log_odds, -z, -self.cue_log_odds)
     
     def next_states(self, x):
         return self.which_state_down(x), self.which_state_up(x)
@@ -63,8 +75,9 @@ class Bernoulli2Diffusion:
         return 1 - prob_up, prob_up
     
     def next_z_prob(self, z):
-        pt1 = self.prob_t1(z)
-        return 1 - pt1, pt1
+        pc1 = self.prob_c1(z)
+        # return prob of cue (for task) 0 and cue (for task) 1, respectively 
+        return 1 - pc1, pc1
 
     # state-action value computation and manipulation        
     def state_sample_value(self, x, z, sample_action):
@@ -93,8 +106,11 @@ class Bernoulli2Diffusion:
         return value_continue
     
     def state_terminate_value_h1(self, x, z):
-        pt1 = self.prob_t1(z)
-        return (1-pt1) * self.prob_h1(x, 0) + pt1 * self.prob_h1(x, 1)
+        eta = exp(self.z_log_odds * z)
+        prob_z_and_task1 = (eta*self.pvalid + (1-self.pvalid)) * self.task_prior
+        prob_z_and_task0 = (self.pvalid + eta*(1-self.pvalid)) * (1-self.task_prior)
+        prob_task1 = prob_z_and_task1 / (prob_z_and_task1 + prob_z_and_task0)
+        return (1-prob_task1) * self.prob_h1(x, 0) + prob_task1 * self.prob_h1(x, 1)
 
     def state_terminate_value_h0(self, x, z):
         return 1 - self.state_terminate_value_h1(x, z)
@@ -104,9 +120,8 @@ class Bernoulli2Diffusion:
         return self.v[ind]
     
     def state_value_new(self, x, z):
-        return max(self.state_sample_value_max(x, z)[0], 
-                   self.state_terminate_value_h0(x, z),
-                   self.state_terminate_value_h1(x, z))
+        tval_h1 = self.state_terminate_value_h1(x, z)
+        return max(self.state_sample_value_max(x, z)[0], 1-tval_h1, tval_h1)
     
     def state_sample_value_max(self, x, z):
         vstar = -inf
@@ -124,25 +139,7 @@ class Bernoulli2Diffusion:
         value_diff = new_value - self.v[ind]
         self.v[ind] = new_value
         return value_diff
-    
-    def update_sweep(self):
-        max_change = 0.
-        for ind in np.ndindex(self.v.shape):
-            x, z = self.state_of_index(ind)
-            change = self.state_value_update(x, z)
-            max_change = max(max_change, abs(change))
-        return max_change
-    
-    def optimize_value(self, tol=1e-6, maxiter=1e4):
-        change = 1
-        iter = 0
-        while change > tol and iter < maxiter:
-            change = self.update_sweep()
-            iter = iter + 1
-            # print('Change of ' + str(change) + ' after ' + str(iter) + ' iterations \r')
-            print(change)
-        print(iter)
-        
+            
     # book-keeping
     def which_state_up(self, x):
         return min(self.state_range, x + 1)
@@ -157,7 +154,7 @@ class Bernoulli2Diffusion:
         return (ind[0] - self.state_range, ind[1] - self.state_range), ind[2] - self.state_range
 
     def in_sample_region(self, x, z):
-        cv = self.state_sample_value(x, z)
+        cv, astar = self.state_sample_value_max(x, z)
         return  cv > self.state_terminate_value_h1(x, z) and cv > self.state_terminate_value_h0(x, z)
     
     def get_sample_region(self):
@@ -167,15 +164,19 @@ class Bernoulli2Diffusion:
             y[ind] = self.in_sample_region(x, z)
         return y
     
-    def simulate_agent(self, h1_status=(True, True), t1_status=True, x_init=(0,0), z_init = 0, step_limit=1e4):
+    def simulate_agent(self, h1_status=(True, True), c1_status=True, cue_valid=True, x_init=(0,0), z_init=0, step_limit=1e4):
         prob_up_x = (self.sigma[0] if h1_status[0] else 1.0 - self.sigma[0], \
                    self.sigma[1] if h1_status[1] else 1.0 - self.sigma[1])
-        prob_up_z = self.theta if t1_status else 1.0 - self.theta
+        prob_up_z = self.theta if c1_status else 1.0 - self.theta
         steps = 0
         x0 = x_init[0]
         x1 = x_init[1]
         z = z_init
         in_sample_region = True
+        
+        t1_h1_correct = ( (c1_status and cue_valid) or (not c1_status and not cue_valid) ) and h1_status[1]
+        t0_h1_correct = ( (not c1_status and cue_valid) or (c1_status and not cue_valid) ) and h1_status[0]
+        h1_correct = t1_h1_correct or t0_h1_correct
         
         while in_sample_region:
             sample_value, action = self.state_sample_value_max((x0, x1), z)
@@ -194,14 +195,15 @@ class Bernoulli2Diffusion:
                     z = self.which_state_up(z) if random() < prob_up_z else self.which_state_down(z)
             else:
                 chose_h1 = self.state_terminate_value_h1((x0, x1), z) > self.state_terminate_value_h0((x0, x1), z)
-                correct = (not t1_status and chose_h1 == h1_status[0]) or (t1_status and chose_h1 == h1_status[1])
+                correct = h1_correct == chose_h1
+
         return steps, correct
     
-    def performance(self, h1_status=(True, True), t1_status=True, x_init=(0,0), z_init=0, niter=int(1e4)):
+    def performance(self, h1_status=(True, True), c1_status=True, cue_valid=True, x_init=(0,0), z_init=0, niter=int(1e4)):
         rt = 0.
         acc = 0.
         for i in range(niter):
-            rti, acci = self.simulate_agent(h1_status, t1_status, x_init, z_init, niter)
+            rti, acci = self.simulate_agent(h1_status, c1_status, cue_valid, x_init, z_init, niter)
             rt += rti
             acc += acci
         return rt/niter, acc/niter
@@ -217,6 +219,31 @@ def view_slice(diffobj, z):
     ax.pcolormesh(x, x, Y[:,:,zind])
     ax.set_aspect(1)
     return fig, ax
+
+@njit(parallel=True)
+def update_sweep(obj):
+    max_change = 0.
+    indicies = list(np.ndindex(obj.v.shape))
+    # for ind in np.ndindex(obj.v.shape):
+    tmp_index = obj.state_of_index
+    tmp_update = obj.state_value_update
+    for i in prange(len(indicies)):
+        ind = indicies[i]
+        x, z = tmp_index(ind)
+        change = tmp_update(x, z)
+        max_change = max(max_change, abs(change))
+    return max_change
+
+def optimize_value(obj, tol=1e-6, maxiter=1e4):
+    change = 1
+    iter = 0
+    while change > tol and iter < maxiter:
+        change = update_sweep(obj)
+        iter = iter + 1
+        # print('Change of ' + str(change) + ' after ' + str(iter) + ' iterations \r')
+        print(change)
+    print(iter)
+
 
 # def view_solution(diffobj):
 #     z = np.ma.masked_array(diffobj.v, mask=diffobj.get_sample_region())
