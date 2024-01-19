@@ -17,7 +17,7 @@ spec = [('sigma', UniTuple(float64,2)),
             ('v', float64[:,:,:])]
 
 @jitclass(spec)
-class Bernoulli2Diffusion:
+class Bernoulli3Diffusion:
 
     def __init__(self, sigma=(0.6, 0.6), theta=0.6, cost=-0.001, sample_actions=(List(['x0']), List(['x1']), List(['z'])), state_range=50):
 
@@ -157,7 +157,7 @@ class Bernoulli2Diffusion:
         return (ind[0] - self.state_range, ind[1] - self.state_range), ind[2] - self.state_range
 
     def in_sample_region(self, x, z):
-        cv = self.state_sample_value(x, z)
+        cv, astar = self.state_sample_value_max(x, z)
         return  cv > self.state_terminate_value_h1(x, z) and cv > self.state_terminate_value_h0(x, z)
     
     def get_sample_region(self):
