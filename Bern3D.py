@@ -17,7 +17,7 @@ spec = [('sigma', UniTuple(float64,2)),
             ('cue_log_odds', float64),
             ('pvalid', float64),
             ('task_prior', float64),
-            ('sample_actions', UniTuple(ListType(unicode_type), 1)), # must be manually changed for different number of actions :(
+            ('sample_actions', UniTuple(ListType(unicode_type), 3)), # must be manually changed for different number of actions :(
             ('v', float64[:,:,:])]
 
 @jitclass(spec)
@@ -132,6 +132,24 @@ class Bernoulli3Diffusion:
                 vstar = v
                 astar = a
         return vstar, astar
+    
+    def state_sample_softmax(self, x, z, inv_temp):
+        v = np.empty(len(self.sample_actions))
+        for ind, a in enumerate(self.sample_actions):
+            v[ind] = inv_temp * self.state_sample_value(x, z, a)
+        v = v - np.max(v)
+        pa = np.exp(v)/np.sum(np.exp(v))
+        aind = np.argmax(np.cumsum(pa) > random())
+        return self.sample_actions[aind]
+    
+    def state_sample_egreedy(self, x, z, epsilon):
+        if random() < epsilon:
+            nsa = len(self.sample_actions)
+            cumprob = np.linspace(1/nsa, 1, nsa)
+            aind = np.argmax(cumprob > random())
+            return self.sample_actions[aind]
+        else:
+            return self.state_sample_value_max(x, z)[1]
 
     def state_value_update(self, x, z):
         ind = self.index_of_state(x, z)
@@ -164,7 +182,7 @@ class Bernoulli3Diffusion:
             y[ind] = self.in_sample_region(x, z)
         return y
     
-    def simulate_agent(self, h1_status=(True, True), c1_status=True, cue_valid=True, x_init=(0,0), z_init=0, step_limit=1e4):
+    def simulate_agent(self, h1_status=(True, True), c1_status=True, cue_valid=True, x_init=(0,0), z_init=0, noisy=False, epsilon=0.0, step_limit=1e4):
         prob_up_x = (self.sigma[0] if h1_status[0] else 1.0 - self.sigma[0], \
                    self.sigma[1] if h1_status[1] else 1.0 - self.sigma[1])
         prob_up_z = self.theta if c1_status else 1.0 - self.theta
@@ -187,23 +205,28 @@ class Bernoulli3Diffusion:
                 steps += 1
                 if steps > step_limit:
                     raise Exception('Not all who wander are lost, but this agent probably is.')
-                if 'x0' in action:
-                    x0 = self.which_state_up(x0) if random() < prob_up_x[0] else self.which_state_down(x0)
-                if 'x1' in action: 
-                    x1 = self.which_state_up(x1) if random() < prob_up_x[1] else self.which_state_down(x1)
-                if 'z' in action:
-                    z = self.which_state_up(z) if random() < prob_up_z else self.which_state_down(z)
+                else:
+                    if noisy:
+                        action = self.state_sample_egreedy((x0,x1),z, epsilon)
+                    if 'x0' in action:
+                        x0 = self.which_state_up(x0) if random() < prob_up_x[0] else self.which_state_down(x0)
+                    if 'x1' in action: 
+                        x1 = self.which_state_up(x1) if random() < prob_up_x[1] else self.which_state_down(x1)
+                    if 'z' in action:
+                        z = self.which_state_up(z) if random() < prob_up_z else self.which_state_down(z)
             else:
                 chose_h1 = self.state_terminate_value_h1((x0, x1), z) > self.state_terminate_value_h0((x0, x1), z)
                 correct = h1_correct == chose_h1
 
         return steps, correct
     
-    def performance(self, h1_status=(True, True), c1_status=True, cue_valid=True, x_init=(0,0), z_init=0, niter=int(1e4)):
+    def performance(self, h1_status=(True, True), c1_status=True, cue_valid=True, x_init=(0,0), z_init=0, epsilon=0.0, niter=int(1e4)):
         rt = 0.
         acc = 0.
+        noisy = epsilon != 0.0
+        
         for i in range(niter):
-            rti, acci = self.simulate_agent(h1_status, c1_status, cue_valid, x_init, z_init, niter)
+            rti, acci = self.simulate_agent(h1_status, c1_status, cue_valid, x_init, z_init, noisy, epsilon, niter)
             rt += rti
             acc += acci
         return rt/niter, acc/niter
@@ -241,7 +264,7 @@ def optimize_value(obj, tol=1e-6, maxiter=1e4):
         change = update_sweep(obj)
         iter = iter + 1
         # print('Change of ' + str(change) + ' after ' + str(iter) + ' iterations \r')
-        print(change)
+        # print(change)
     print(iter)
 
 
