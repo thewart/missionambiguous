@@ -1,7 +1,4 @@
-import numpy as np
-from numpy import inf
-from math import log, exp
-from numba import prange, njit
+from Bern3D import Bern3Diff
 from numba.types import float64, boolean, UniTuple
 from numba.experimental import jitclass
 from random import random
