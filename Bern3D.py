@@ -21,9 +21,8 @@ spec = [('sigma', UniTuple(float64,2)),
             ('v', float64[:,:,:])]
 
 @jitclass(spec)
-class Bernoulli3Diffusion:
+class Bern3Diff:
     def __init__(self, sigma=(0.6, 0.6), theta=0.6, pvalid=1.0, task_prior=0.5, cost=-0.001, sample_actions=(List(['x0']), List(['x1']), List(['z'])), state_range=50):
-
 
         if cost >= 0:
             raise Exception("You really want cost to be strictly negative.")
@@ -181,55 +180,6 @@ class Bernoulli3Diffusion:
             x, z = self.state_of_index(ind)
             y[ind] = self.in_sample_region(x, z)
         return y
-    
-    def simulate_agent(self, h1_status=(True, True), c1_status=True, cue_valid=True, x_init=(0,0), z_init=0, noisy=False, epsilon=0.0, step_limit=1e4):
-        prob_up_x = (self.sigma[0] if h1_status[0] else 1.0 - self.sigma[0], \
-                   self.sigma[1] if h1_status[1] else 1.0 - self.sigma[1])
-        prob_up_z = self.theta if c1_status else 1.0 - self.theta
-        steps = 0
-        x0 = x_init[0]
-        x1 = x_init[1]
-        z = z_init
-        in_sample_region = True
-        
-        t1_h1_correct = ( (c1_status and cue_valid) or (not c1_status and not cue_valid) ) and h1_status[1]
-        t0_h1_correct = ( (not c1_status and cue_valid) or (c1_status and not cue_valid) ) and h1_status[0]
-        h1_correct = t1_h1_correct or t0_h1_correct
-        
-        while in_sample_region:
-            sample_value, action = self.state_sample_value_max((x0, x1), z)
-            in_sample_region = sample_value > self.state_terminate_value_h0((x0, x1), z) and sample_value > self.state_terminate_value_h1((x0, x1), z)
-            # in_sample_region = self.in_sample_region(x, z)
-
-            if in_sample_region:
-                steps += 1
-                if steps > step_limit:
-                    raise Exception('Not all who wander are lost, but this agent probably is.')
-                else:
-                    if noisy:
-                        action = self.state_sample_egreedy((x0,x1),z, epsilon)
-                    if 'x0' in action:
-                        x0 = self.which_state_up(x0) if random() < prob_up_x[0] else self.which_state_down(x0)
-                    if 'x1' in action: 
-                        x1 = self.which_state_up(x1) if random() < prob_up_x[1] else self.which_state_down(x1)
-                    if 'z' in action:
-                        z = self.which_state_up(z) if random() < prob_up_z else self.which_state_down(z)
-            else:
-                chose_h1 = self.state_terminate_value_h1((x0, x1), z) > self.state_terminate_value_h0((x0, x1), z)
-                correct = h1_correct == chose_h1
-
-        return steps, correct
-    
-    def performance(self, h1_status=(True, True), c1_status=True, cue_valid=True, x_init=(0,0), z_init=0, epsilon=0.0, niter=int(1e4)):
-        rt = 0.
-        acc = 0.
-        noisy = epsilon != 0.0
-        
-        for i in range(niter):
-            rti, acci = self.simulate_agent(h1_status, c1_status, cue_valid, x_init, z_init, noisy, epsilon, niter)
-            rt += rti
-            acc += acci
-        return rt/niter, acc/niter
 
 def solution_as_array(diffobj):
     return np.ma.masked_array(diffobj.v, mask=diffobj.get_sample_region())
@@ -244,12 +194,12 @@ def view_slice(diffobj, z):
     return fig, ax
 
 @njit(parallel=True)
-def update_sweep(obj):
+def update_sweep(diffobj):
     max_change = 0.
-    indicies = list(np.ndindex(obj.v.shape))
+    indicies = list(np.ndindex(diffobj.v.shape))
     # for ind in np.ndindex(obj.v.shape):
-    tmp_index = obj.state_of_index
-    tmp_update = obj.state_value_update
+    tmp_index = diffobj.state_of_index
+    tmp_update = diffobj.state_value_update
     for i in prange(len(indicies)):
         ind = indicies[i]
         x, z = tmp_index(ind)
@@ -257,11 +207,11 @@ def update_sweep(obj):
         max_change = max(max_change, abs(change))
     return max_change
 
-def optimize_value(obj, tol=1e-6, maxiter=1e4):
+def optimize_value(diffobj, tol=1e-6, maxiter=1e4):
     change = 1
     iter = 0
     while change > tol and iter < maxiter:
-        change = update_sweep(obj)
+        change = update_sweep(diffobj)
         iter = iter + 1
         # print('Change of ' + str(change) + ' after ' + str(iter) + ' iterations \r')
         # print(change)
