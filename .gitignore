@@ -1,2 +1,5 @@
 __pycache__/Bern2D.cpython-37.pyc
 __pycache__/Bern2D.cpython-311.pyc
+*.pdf
+*.pyc
+*.png
